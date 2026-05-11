@@ -48,3 +48,4 @@ Issues = "https://github.com/cppalliance/cppa-weblate-plugin/issues"
 [tool.uv.build-backend]
 module-name = "boost_weblate"
 module-root = "src"
+source-include = ["docs/**"]
