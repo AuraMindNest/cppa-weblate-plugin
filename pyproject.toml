@@ -1,0 +1,51 @@
+[build-system]
+build-backend = "uv_build"
+requires = ["uv_build>=0.8.18,<0.12.0"]
+
+[project]
+name = "cppa-weblate-plugin"
+version = "0.1.0"
+description = "Standalone Weblate plugin for Boost documentation translation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "BSL-1.0"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Andrew Zhang", email = "whisper67265@outlook.com" },
+]
+classifiers = [
+  "Environment :: Web Environment",
+  "License :: OSI Approved :: Boost Software License 1.0 (BSL-1.0)",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Internationalization",
+  "Topic :: Software Development :: Localization",
+]
+keywords = [
+  "boost",
+  "gettext",
+  "i18n",
+  "l10n",
+  "quickbook",
+  "translation",
+  "weblate",
+]
+
+dependencies = [
+  "Weblate",
+]
+
+[project.urls]
+Homepage = "https://github.com/cppalliance/cppa-weblate-plugin"
+Repository = "https://github.com/cppalliance/cppa-weblate-plugin"
+Issues = "https://github.com/cppalliance/cppa-weblate-plugin/issues"
+
+[tool.uv.build-backend]
+module-name = "boost_weblate"
+module-root = "src"
+source-include = ["docs/**"]
