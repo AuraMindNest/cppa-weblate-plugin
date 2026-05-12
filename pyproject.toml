@@ -76,4 +76,10 @@ select = ["E", "F", "I", "UP"]
 [tool.uv.build-backend]
 module-name = "boost_weblate"
 module-root = "src"
-source-include = ["docs/**", "settings-override.py"]
+source-include = [
+  "docs/**",
+  "LICENSES/**",
+  "REUSE.toml",
+  "uv.lock",
+  "settings-override.py"
+]
