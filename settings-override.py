@@ -1,9 +1,15 @@
-# QuickBook format registration for cppa-weblate-plugin (upstream Weblate from PyPI + pip install).
+# SPDX-FileCopyrightText: 2026 Andrew Zhang <whisper67265@outlook.com>
+#
+# SPDX-License-Identifier: BSL-1.0
+
+# QuickBook format registration for cppa-weblate-plugin (upstream Weblate from PyPI
+# plus pip install).
 #
 # Relationship to Weblate Docker settings (see ``weblate.settings_docker``):
 # - After environment variables are applied, Weblate sets ``ADDITIONAL_CONFIG`` to a
 #   fixed path (upstream: ``Path("/app/data/settings-override.py")``) and, if that file
-#   exists, compiles the file and runs it with ``exec()`` in the *same* namespace as the rest
+#   exists, compiles the file and runs it with ``exec()`` in the *same* namespace as
+#   the rest
 #   of ``settings_docker``. There is no directory walk or pattern match under
 #   ``DATA_DIR`` / ``WEBLATE_DATA_DIR`` for this hook—only that single file path.
 # - ``DATA_DIR`` (default ``/app/data`` via ``WEBLATE_DATA_DIR``) is the data volume
@@ -23,6 +29,6 @@
 #
 # Build context: include this file from the plugin checkout (repo name uses a hyphen).
 
-WEBLATE_FORMATS += (  # type: ignore[name-defined]
+WEBLATE_FORMATS += (  # noqa: F821  # defined by Weblate before exec()
     "boost_weblate.formats.quickbook.QuickBookFormat",
 )
