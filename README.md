@@ -13,19 +13,19 @@ This repository uses [uv](https://docs.astral.sh/uv/) for environments and [prek
 Install dependencies including the hook runner:
 
 ```bash
-uv sync --extra dev
+uv sync --group pre-commit
 ```
 
-Run every hook on the whole tree (same as the **Lint and format** GitHub workflow):
+Run every hook on the whole tree:
 
 ```bash
-uv run --extra dev prek run --all-files
+uv run --only-group pre-commit prek run --all-files --show-diff-on-failure
 ```
 
 Install Git commit hooks so hooks run on each commit:
 
 ```bash
-uv run --extra dev prek install
+uv run --only-group pre-commit prek install
 ```
 
 If you use the classic `pre-commit` CLI instead of prek, install it separately and run `pre-commit install` after `uv sync`.
