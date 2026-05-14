@@ -104,7 +104,7 @@ unauthorized_licenses = []
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
-testpaths = ["test"]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 88
@@ -121,5 +121,6 @@ source-include = [
   "LICENSES/**",
   "REUSE.toml",
   "uv.lock",
-  "settings-override.py"
+  "settings-override.py",
+  "tests/**"
 ]

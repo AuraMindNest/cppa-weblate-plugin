@@ -8,7 +8,8 @@ Patterns follow Weblate upstream ``ConvertFormatTest`` / ``QuickBookFormatTest``
 in ``weblate/formats/tests/test_convert.py`` (temp files, ``storage.save()``,
 two-heading round-trip, ``existing_units`` merge, import-existing pair).
 
-Django is configured in ``tests/conftest.py`` (see ``tests/django_qbk_format_settings.py``).
+Django is configured in ``tests/conftest.py`` (see
+``tests/django_qbk_format_settings.py``).
 
 Run manually::
 
@@ -25,7 +26,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
-
 from weblate.utils.state import STATE_TRANSLATED
 
 if TYPE_CHECKING:

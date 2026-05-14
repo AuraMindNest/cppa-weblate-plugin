@@ -15,14 +15,13 @@ from __future__ import annotations
 from typing import IO, TYPE_CHECKING
 
 from django.utils.translation import gettext_lazy
-
-from boost_weblate.utils.quickbook import QuickBookFile, QuickBookTranslator
 from weblate.formats.convert import ConvertFormat
 from weblate.formats.helpers import NamedBytesIO
 
+from boost_weblate.utils.quickbook import QuickBookFile, QuickBookTranslator
+
 if TYPE_CHECKING:
     from translate.storage.base import TranslationStore
-
     from weblate.formats.base import TranslationFormat
 
 
