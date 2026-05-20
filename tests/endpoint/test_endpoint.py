@@ -98,8 +98,19 @@ def test_boost_endpoint_config_ready_registers_urls(
     assert len(fake.real_patterns) == 1
 
 
-def test_settings_override_exec_appends_format_and_endpoint_app() -> None:
+@pytest.mark.parametrize(
+    "installed_apps",
+    [
+        pytest.param((), id="tuple"),
+        pytest.param([], id="list"),
+    ],
+)
+def test_settings_override_exec_appends_format_and_endpoint_app(
+    installed_apps: tuple[str, ...] | list[str],
+) -> None:
     """Load ``settings_override.py`` as ``boost_weblate.settings_override``.
+
+    Covers tuple (immutable reassignment) and list (Docker / in-place ``+=``).
 
     Used so coverage attributes execution to the real file path.
     """
@@ -111,11 +122,11 @@ def test_settings_override_exec_appends_format_and_endpoint_app() -> None:
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         module.__dict__["WEBLATE_FORMATS"] = ()
-        module.__dict__["INSTALLED_APPS"] = ()
+        module.__dict__["INSTALLED_APPS"] = installed_apps
         sys.modules[name] = module
         spec.loader.exec_module(module)
         formats = module.WEBLATE_FORMATS
-        apps_tuple = module.INSTALLED_APPS
+        apps_out = module.INSTALLED_APPS
     finally:
         if saved is not None:
             sys.modules[name] = saved
@@ -124,4 +135,8 @@ def test_settings_override_exec_appends_format_and_endpoint_app() -> None:
 
     assert isinstance(formats, tuple)
     assert "boost_weblate.formats.quickbook.QuickBookFormat" in formats
-    assert "boost_weblate.endpoint.apps.BoostEndpointConfig" in apps_tuple
+    assert "boost_weblate.endpoint.apps.BoostEndpointConfig" in apps_out
+    if isinstance(installed_apps, list):
+        assert apps_out is installed_apps
+    else:
+        assert isinstance(apps_out, tuple)
