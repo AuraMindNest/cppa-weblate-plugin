@@ -67,4 +67,9 @@ WEBLATE_FORMATS = weblate_formats_with_quickbook()
 
 _INSTALLED_APPS = globals().get("INSTALLED_APPS")
 if _INSTALLED_APPS is not None:
-    _INSTALLED_APPS += (_ENDPOINT_APP_CONFIG,)
+    # Tuple += creates a new object; assign back so exec namespace / settings see it.
+    # List += mutates in place, matching Weblate/Docker settings namespaces.
+    if isinstance(_INSTALLED_APPS, tuple):
+        globals()["INSTALLED_APPS"] = _INSTALLED_APPS + (_ENDPOINT_APP_CONFIG,)
+    else:
+        _INSTALLED_APPS += (_ENDPOINT_APP_CONFIG,)
