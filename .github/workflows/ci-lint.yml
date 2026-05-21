@@ -5,8 +5,11 @@
 name: Lint and format
 
 on:
-  push:
   pull_request:
+  push:
+    branches:
+    - main
+    - develop
 
 permissions:
   contents: read
