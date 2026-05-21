@@ -16,7 +16,7 @@ class AddOrUpdateRequestSerializer(serializers.Serializer):
 
     organization = serializers.CharField(
         required=True,
-        help_text="GitHub organization name (e.g., 'CppDigest')",
+        help_text="GitHub organization name",
     )
     add_or_update = serializers.DictField(
         child=serializers.ListField(child=serializers.CharField()),
@@ -33,7 +33,7 @@ class AddOrUpdateRequestSerializer(serializers.Serializer):
         help_text="Boost version (e.g., 'boost-1.90.0')",
     )
     extensions = serializers.ListField(
-        child=serializers.CharField(),
+        child=serializers.CharField(allow_blank=True),
         required=False,
         allow_null=True,
         default=None,
@@ -43,6 +43,12 @@ class AddOrUpdateRequestSerializer(serializers.Serializer):
             "If None or empty, all Weblate-supported extensions are used."
         ),
     )
+
+    def validate_extensions(self, value: list[str] | None) -> list[str] | None:
+        """Strip entries and remove blanks so all-empty input does not filter files."""
+        if value is None:
+            return None
+        return [v.strip() for v in value if v.strip()]
 
     def validate_add_or_update(self, value: dict[str, Any]) -> dict[str, Any]:
         """Require non-empty string language keys and non-empty submodule lists."""
