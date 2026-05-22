@@ -75,13 +75,13 @@ Minimal health check. Returns a plain-text `ok` string. No authentication requir
 
 **Request**
 
-```
+```http
 GET /boost-endpoint/plugin-ping/
 ```
 
 **Response**
 
-```
+```http
 HTTP/1.1 200 OK
 Content-Type: text/plain
 
@@ -96,14 +96,14 @@ Returns metadata about the installed plugin: package name, version, and the list
 
 **Request**
 
-```
+```http
 GET /boost-endpoint/info/
 Authorization: Token <token>
 ```
 
 **Response**
 
-```
+```http
 HTTP/1.1 200 OK
 Content-Type: application/json
 
@@ -128,7 +128,7 @@ Creates or updates Weblate projects and components for one or more Boost library
 
 **Request**
 
-```
+```http
 POST /boost-endpoint/add-or-update/
 Authorization: Token <token>
 Content-Type: application/json
@@ -277,7 +277,7 @@ The Celery task (`boost_add_or_update_task`) returns a dictionary keyed by langu
 
 ## Async execution model
 
-```
+```text
 POST /boost-endpoint/add-or-update/
         │
         ▼
@@ -378,13 +378,13 @@ Component names and slugs are derived from the relative file path within the clo
 
 **Name** — directory parts are joined with ` / `, each part title-cased with underscores and hyphens replaced by spaces, and the file extension (without the leading dot) is appended in parentheses:
 
-```
+```text
 doc/html/intro.adoc  →  "Doc / Html / Intro (adoc)"
 ```
 
 **Slug** — directory and file parts are lowercased with underscores replaced by hyphens, joined with `-`, and the extension is appended:
 
-```
+```text
 doc/html/intro.adoc  →  "doc-html-intro-adoc"
 ```
 

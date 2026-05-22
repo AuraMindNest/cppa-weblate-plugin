@@ -212,7 +212,7 @@ The view validates the request with `AddOrUpdateRequestSerializer`, dispatches t
 
 Heavy work (git clone, file scanning, Weblate project/component create-or-update) runs asynchronously in a Celery worker via `boost_add_or_update_task` (`src/boost_weblate/endpoint/tasks.py`). The view enqueues the task with `.delay()` and returns HTTP 202 immediately.
 
-```
+```text
 POST /boost-endpoint/add-or-update/
         │
         ▼
