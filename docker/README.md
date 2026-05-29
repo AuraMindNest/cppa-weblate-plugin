@@ -19,7 +19,9 @@ Shared Docker assets for CI and CD.
 docker compose -f docker/docker-compose.ci.yml build
 docker compose -f docker/docker-compose.ci.yml up -d
 
-# CD on deploy server (copy ../.env.example to ../.env and edit secrets):
+# CD on deploy server (copy .env.example to repo-root .env; set WEBLATE_URL_PREFIX, REDIS_DB, secrets):
 cp .env.example .env
 docker compose -f docker/docker-compose.cd.yml --env-file .env up -d
 ```
+
+Set `WEBLATE_URL_PREFIX=/weblate` when nginx serves the app under `/weblate/`. Use `REDIS_DB=1` when sharing Redis with other stacks.
