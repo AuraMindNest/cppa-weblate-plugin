@@ -44,6 +44,7 @@ jobs:
         envs: DEPLOY_BRANCH
         script: |
           set -euo pipefail
+          git config --global --add safe.directory /opt/cppa-weblate-plugin
           cd /opt/cppa-weblate-plugin
           git fetch origin "${DEPLOY_BRANCH}"
           git checkout "${DEPLOY_BRANCH}"

@@ -11,6 +11,7 @@ on:
     branches: [main, develop]
 
 permissions:
+  actions: write
   contents: read
 
 jobs:
