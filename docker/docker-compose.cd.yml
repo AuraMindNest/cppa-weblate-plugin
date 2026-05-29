@@ -24,11 +24,11 @@ services:
       POSTGRES_PORT: '5432'
       POSTGRES_USER: ${POSTGRES_USER:-weblate_app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-weblate_db}
-      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-${POSTGRES_DB:-weblate_db}}
+
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-weblate_db}
       REDIS_HOST: redis
       REDIS_PORT: '6379'
-      REDIS_DB: ${REDIS_DB:-1}
+
       CELERY_SINGLE_PROCESS: ${CELERY_SINGLE_PROCESS:-1}
     healthcheck:
       test: [CMD, curl, -sf, http://localhost:8080/weblate/healthz/]
