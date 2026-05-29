@@ -32,9 +32,6 @@ stack_up
 echo "=== Waiting for Weblate ==="
 stack_wait_healthy "${HEALTH_TIMEOUT:-180}"
 
-echo "=== Configuring Weblate SSH known_hosts for GitHub ==="
-stack_ensure_github_known_hosts
-
 echo "=== Creating API token ==="
 WEBLATE_API_TOKEN="$(stack_create_token admin)"
 export WEBLATE_API_TOKEN
@@ -53,6 +50,8 @@ unset TMP_WEBLATE_SSH_PUBKEY
 
 if [[ -n "${GH_TEST_REPO_TOKEN:-}" ]]; then
     export GH_TEST_REPO_TOKEN
+    echo "=== Configuring Weblate SSH known_hosts for GitHub ==="
+    stack_ensure_github_known_hosts
     echo "=== GH_TEST_REPO_TOKEN is set (${#GH_TEST_REPO_TOKEN} chars); GitHub E2E tests enabled ==="
 else
     echo "=== GH_TEST_REPO_TOKEN is not set; GitHub E2E/Celery tests will be skipped ==="

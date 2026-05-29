@@ -273,7 +273,7 @@ All `ci-combination-*` jobs build the CI Docker stack (`docker/docker-compose.ci
 
 ### CD (`cd.yml`)
 
-Triggered after CI succeeds on a `develop` push. SSHes into the staging server at `/opt/cppa-weblate-plugin`, pulls the latest code, rebuilds the CD Docker image (`docker/docker-compose.cd.yml`), brings the stack up, and polls `/weblate/healthz/` for up to 120 s. On failure, logs the last 40 lines and exits non-zero. Concurrency is locked per branch so deploys never overlap.
+Triggered after CI succeeds on a `develop` push. SSHes into the staging server at `/opt/cppa-weblate-plugin`, pulls the latest code, rebuilds the CD Docker image (`docker/docker-compose.cd.yml`), brings the stack up, and polls `${WEBLATE_URL_PREFIX}/healthz/` on `WEBLATE_PORT` (from `.env`) for up to 180 s. On failure, logs the last 40 lines and exits non-zero. Concurrency is locked per branch so deploys never overlap.
 
 Full deployment procedure: [docs/deployment-runbook.md](docs/deployment-runbook.md).
 

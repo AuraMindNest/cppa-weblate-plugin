@@ -28,7 +28,8 @@ tooling = [
 
 [project]
 authors = [
-  {name = "Andrew Zhang", email = "whisper67265@outlook.com"}
+  {name = "Andrew Zhang", email = "whisper67265@outlook.com"},
+  {name = "William Jin", email = "AuraMindNest@outlook.com"}
 ]
 classifiers = [
   "Environment :: Web Environment",

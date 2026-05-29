@@ -15,7 +15,7 @@ Step-by-step guide for deploying `cppa-weblate-plugin` to a staging or productio
 | Docker Engine | 24 + with Compose v2 (`docker compose`) |
 | Host PostgreSQL | 16 recommended; a dedicated user and database (see [Database setup](#database-setup)) |
 | Redis | 7+; shared via the `boost-data-collector_default` external Docker network |
-| Reverse proxy | nginx (or equivalent) terminating TLS and proxying to `127.0.0.1:9103` |
+| Reverse proxy | nginx (or equivalent) terminating TLS and proxying to `127.0.0.1:8080` |
 | Git checkout | Repository cloned to `/opt/cppa-weblate-plugin` on the deploy server |
 
 ## Database Setup
@@ -60,7 +60,7 @@ Key variables set in the Compose file or `.env` (full reference in `.env.example
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `WEBLATE_PORT` | `9103` | Host port bound to `127.0.0.1`; nginx proxies to this |
+| `WEBLATE_PORT` | `8080` | Host port bound to `127.0.0.1`; nginx proxies to this |
 | `WEBLATE_SITE_DOMAIN` | `weblate.example.com` | Public hostname (no scheme) |
 | `WEBLATE_URL_PREFIX` | `/weblate` | Subpath when behind nginx at `https://<host>/weblate/` |
 | `WEBLATE_DEBUG` | `0` | Set `1` only for troubleshooting |
@@ -95,7 +95,7 @@ Defined in `docker-compose.cd.yml`:
 
 ```yaml
 healthcheck:
-  test: [CMD, curl, -sf, http://localhost:8080/weblate/healthz/]
+  test: [CMD, curl, -sf, "http://localhost:8080${WEBLATE_URL_PREFIX:-}/healthz/"]
   interval: 10s
   timeout: 5s
   retries: 12
@@ -112,23 +112,29 @@ docker compose -f docker/docker-compose.cd.yml --env-file .env ps
 
 ### External health poll (CD pipeline)
 
-The `cd.yml` GitHub Actions workflow polls after deploy:
+The `cd.yml` GitHub Actions workflow polls after deploy (reads `WEBLATE_PORT` and `WEBLATE_URL_PREFIX` from `.env`):
 
 ```bash
-for i in $(seq 1 24); do
-    curl -sf http://127.0.0.1:9103/weblate/healthz/ && exit 0
+set -a && [ -f .env ] && . ./.env && set +a
+WEBLATE_PORT="${WEBLATE_PORT:-8080}"
+WEBLATE_URL_PREFIX="${WEBLATE_URL_PREFIX:-}"
+for i in $(seq 1 36); do
+    curl -sf "http://127.0.0.1:${WEBLATE_PORT}${WEBLATE_URL_PREFIX}/healthz/" && exit 0
     sleep 5
 done
 ```
 
-This gives **120 s** (24 × 5 s) before failing the deploy.
+This gives **180 s** (36 × 5 s) before failing the deploy.
 
 ### Plugin-specific ping
 
 The plugin exposes an unauthenticated ping endpoint:
 
 ```bash
-curl -sf http://127.0.0.1:9103/weblate/boost-endpoint/plugin-ping/
+set -a && [ -f .env ] && . ./.env && set +a
+WEBLATE_PORT="${WEBLATE_PORT:-8080}"
+WEBLATE_URL_PREFIX="${WEBLATE_URL_PREFIX:-}"
+curl -sf "http://127.0.0.1:${WEBLATE_PORT}${WEBLATE_URL_PREFIX}/boost-endpoint/plugin-ping/"
 # Expected: 200 ok (text/plain)
 ```
 
@@ -140,25 +146,31 @@ A `200 ok` response confirms:
 
 ## Post-Deploy Validation
 
-Run these checks after every deploy (automated in CD; manual for first-time setup):
+Run these checks after every deploy (automated in CD; manual for first-time setup). Load deploy vars from `.env` first:
+
+```bash
+set -a && [ -f .env ] && . ./.env && set +a
+WEBLATE_PORT="${WEBLATE_PORT:-8080}"
+WEBLATE_URL_PREFIX="${WEBLATE_URL_PREFIX:-}"
+```
 
 ### 1. Weblate core health
 
 ```bash
-curl -sf http://127.0.0.1:9103/weblate/healthz/
+curl -sf "http://127.0.0.1:${WEBLATE_PORT}${WEBLATE_URL_PREFIX}/healthz/"
 ```
 
 ### 2. Plugin ping
 
 ```bash
-curl -sf http://127.0.0.1:9103/weblate/boost-endpoint/plugin-ping/
+curl -sf "http://127.0.0.1:${WEBLATE_PORT}${WEBLATE_URL_PREFIX}/boost-endpoint/plugin-ping/"
 ```
 
 ### 3. Plugin info (authenticated)
 
 ```bash
 curl -sf -H "Authorization: Token <API_TOKEN>" \
-  http://127.0.0.1:9103/weblate/boost-endpoint/info/
+  "http://127.0.0.1:${WEBLATE_PORT}${WEBLATE_URL_PREFIX}/boost-endpoint/info/"
 ```
 
 Expected JSON:
@@ -195,7 +207,7 @@ The full pipeline (`cd.yml`) triggers on a successful CI run against `develop`:
 1. SSH to the deploy server
 2. `git pull origin develop`
 3. `docker compose … build && up -d`
-4. Poll `/weblate/healthz/` for up to 120 s
+4. Poll `${WEBLATE_URL_PREFIX}/healthz/` on `WEBLATE_PORT` for up to 180 s
 5. On failure: dump the last 40 lines of container logs and exit non-zero
 
 Concurrency is locked per branch (`cancel-in-progress: false`) so deploys never overlap.
@@ -215,7 +227,7 @@ Common causes:
 | `AppRegistryNotReady` | Upstream Weblate reformatted `FormatsConf.FORMATS` | Update the `_FORMATS_BLOCK` regex in `settings_override.py` |
 | `connection refused` on Postgres | `pg_hba.conf` or firewall blocking Docker bridge | Allow `172.17.0.0/16` in `pg_hba.conf`; reload Postgres |
 | `WEBLATE_ADMIN_PASSWORD … set in .env` | `.env` missing or variable unset | Ensure `.env` exists at repo root with both required secrets |
-| `/weblate/healthz/` 404 | `WEBLATE_URL_PREFIX` mismatch | Ensure `.env` has `WEBLATE_URL_PREFIX=/weblate` matching nginx config |
+| `${WEBLATE_URL_PREFIX}/healthz/` 404 | `WEBLATE_URL_PREFIX` mismatch | Ensure `.env` has `WEBLATE_URL_PREFIX` matching nginx config |
 | Redis connection error | External network missing | Run `docker network create boost-data-collector_default` or start the BDC stack first |
 
 ### GitHub SSH host key errors

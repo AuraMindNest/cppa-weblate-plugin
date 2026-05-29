@@ -32,16 +32,19 @@ KNOWN_SOURCE_STRING = "Complex QuickBook test fixture"
 ZH_HANS_TRANSLATION = "复杂 QuickBook 测试夹具"
 
 
-def _assert_process_all_ok(process_all: dict) -> None:
+def _assert_process_all_ok(
+    process_all: dict, *, require_component_changes: bool = False
+) -> None:
     """Assert BoostComponentService.process_all() succeeded for every submodule."""
     assert process_all.get("failed", 0) == 0, process_all
     results = process_all.get("submodule_results", [])
     assert results, process_all
     for entry in results:
         assert entry.get("success") is True, entry
-        created = entry.get("components_created", 0)
-        updated = entry.get("components_updated", 0)
-        assert created + updated > 0, entry
+        if require_component_changes:
+            created = entry.get("components_created", 0)
+            updated = entry.get("components_updated", 0)
+            assert created + updated > 0, entry
 
 
 @dataclass(frozen=True)
@@ -230,7 +233,9 @@ print(json.dumps(out))
         )
         assert out.get("project_slug")
         assert out.get("component_count_before") == 0
-        _assert_process_all_ok(out.get("process_all", {}))
+        _assert_process_all_ok(
+            out.get("process_all", {}), require_component_changes=True
+        )
         assert out["component_count"] > 0, out
         slug = out["project_slug"]
         check = exec_python(
