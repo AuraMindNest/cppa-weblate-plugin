@@ -4,6 +4,10 @@
 
 name: CD
 
+# workflow_run grants an elevated GITHUB_TOKEN by default. Mitigations:
+#   - permissions: contents: read (no write access)
+#   - job-level 'if' requires conclusion == 'success' AND event == 'push'
+#     (ignores PRs, forks, and failed/cancelled runs)
 on:
   workflow_run:
     workflows: [CI]
