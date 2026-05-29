@@ -13,7 +13,7 @@ GitHub Actions and CI/CD helpers for this repository.
 | File | Role |
 |------|------|
 | [`workflows/ci.yml`](workflows/ci.yml) | Umbrella **CI** — runs on push/PR to `main` and `develop` |
-| [`workflows/cd.yml`](workflows/cd.yml) | **Deploy** — after CI succeeds on `develop`, or manual `workflow_dispatch` (staging) |
+| [`workflows/cd.yml`](workflows/cd.yml) | **Deploy** — after CI succeeds on `develop` (staging); no `workflow_dispatch` trigger |
 | [`workflows/ci-lint.yml`](workflows/ci-lint.yml) | Lint and format (prek) |
 | [`workflows/ci-test.yml`](workflows/ci-test.yml) | Unit tests and coverage |
 | [`workflows/ci-package.yml`](workflows/ci-package.yml) | Build and package checks |
