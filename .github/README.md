@@ -30,4 +30,4 @@ Callable workflows (`ci-*`, `ci-combination-*`) are triggered only via `workflow
 |------|------|
 | [`ci/apt-install`](ci/apt-install) | Apt packages for Weblate-related CI jobs |
 
-Deploy uses environment **staging** secrets (`SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`) and [`docker/docker-compose.cd.yml`](../docker/docker-compose.cd.yml) on the server at `/opt/cppa-weblate-plugin`.
+Deploy uses environment **staging** secrets (`SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, `WEBLATE_PORT`, `WEBLATE_URL_PREFIX`) and [`docker/docker-compose.cd.yml`](../docker/docker-compose.cd.yml) on the server at `/opt/cppa-weblate-plugin`.
