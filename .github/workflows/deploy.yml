@@ -9,22 +9,31 @@ on:
     workflows: [CI]
     branches: [develop]
     types: [completed]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Git branch to deploy
+        default: develop
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: deploy-${{ github.event.workflow_run.head_branch }}
+  group: deploy-${{ github.event.workflow_run.head_branch || github.event.inputs.branch || 'develop' }}
   cancel-in-progress: false
 
 jobs:
   deploy:
     if: >-
-      github.event.workflow_run.conclusion == 'success'
-      && github.event.workflow_run.event == 'push'
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: staging
+    env:
+      DEPLOY_BRANCH: ${{ github.event.workflow_run.head_branch || github.event.inputs.branch || 'develop' }}
     steps:
     - name: Deploy via SSH
       uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
@@ -32,12 +41,13 @@ jobs:
         host: ${{ secrets.SSH_HOST }}
         username: ${{ secrets.SSH_USER }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
+        envs: DEPLOY_BRANCH
         script: |
           set -euo pipefail
           cd /opt/cppa-weblate-plugin
-          git fetch origin develop
-          git checkout develop
-          git pull origin develop
+          git fetch origin "${DEPLOY_BRANCH}"
+          git checkout "${DEPLOY_BRANCH}"
+          git pull origin "${DEPLOY_BRANCH}"
           docker compose -f docker/docker-compose.cd.yml --env-file .env build
           docker compose -f docker/docker-compose.cd.yml --env-file .env up -d
           for i in $(seq 1 24); do
