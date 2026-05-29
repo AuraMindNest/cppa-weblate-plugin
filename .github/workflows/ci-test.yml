@@ -5,10 +5,10 @@
 name: Tests and coverage
 
 on:
-  push:
-  pull_request:
+  workflow_call:
 
 permissions:
+  actions: write
   contents: read
 
 jobs:

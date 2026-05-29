@@ -2,16 +2,17 @@
 #
 # SPDX-License-Identifier: BSL-1.0
 
-name: Integration auth
+name: CI combination auth
 
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
+  workflow_call:
+
+permissions:
+  actions: write
+  contents: read
 
 jobs:
-  integration-auth:
+  ci-combination-auth:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -24,7 +25,6 @@ jobs:
     - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
       with:
         python-version: '3.12'
-
 
     # astral-sh/setup-uv v8.1.0
     - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
@@ -39,5 +39,5 @@ jobs:
       # actions/upload-artifact v4.6.2
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
-        name: integration-auth-logs
+        name: ci-combination-auth-logs
         path: /tmp/compose-logs.txt
