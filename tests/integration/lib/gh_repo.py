@@ -196,7 +196,14 @@ class EphemeralGitHubRepo:
 
 
 def default_repo_name() -> str:
-    """Unique repo name for this CI run."""
+    """Unique repo name for this CI run.
+
+    Keep short: Weblate project slug is
+    ``boost-{repo}-documentation-{lang}`` (max ~60 chars).
+    """
     run_id = os.environ.get("GITHUB_RUN_ID", os.environ.get("PYTEST_XDIST_WORKER", ""))
-    suffix = run_id or os.getpid()
-    return f"cppa-weblate-func-test-{suffix}"
+    suffix = str(run_id or os.getpid())
+    # Use tail of run id so long GITHUB_RUN_ID values stay within slug limits.
+    if len(suffix) > 10:
+        suffix = suffix[-10:]
+    return f"cppa-wl-ft-{suffix}"
