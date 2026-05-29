@@ -31,7 +31,7 @@ services:
       REDIS_DB: ${REDIS_DB:-1}
       CELERY_SINGLE_PROCESS: ${CELERY_SINGLE_PROCESS:-1}
     healthcheck:
-      test: [CMD, curl, -f, http://localhost:8080/healthz/]
+      test: [CMD, curl, -sf, http://localhost:8080/weblate/healthz/]
       interval: 10s
       timeout: 5s
       retries: 12
