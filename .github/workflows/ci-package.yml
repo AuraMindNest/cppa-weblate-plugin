@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build-and-check:
-    name: Build packages
+    name: Build and check
     runs-on: ubuntu-latest
     steps:
     # actions/checkout v6.0.2

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSL-1.0
 
-name: CI combination functional
+name: Combination functional
 
 on:
   workflow_call:
@@ -22,7 +22,8 @@ permissions:
   contents: read
 
 jobs:
-  ci-combination-functional:
+  combination-functional:
+    name: Combination functional
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

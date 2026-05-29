@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSL-1.0
 
-name: CI combination smoke
+name: Combination smoke
 
 on:
   workflow_call:
@@ -12,7 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  ci-combination-smoke:
+  combination-smoke:
+    name: Combination smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

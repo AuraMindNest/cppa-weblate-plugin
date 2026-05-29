@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSL-1.0
 
-name: CI combination auth
+name: Combination auth
 
 on:
   workflow_call:
@@ -12,7 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  ci-combination-auth:
+  combination-auth:
+    name: Combination auth
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

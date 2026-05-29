@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  test-coverage:
-    name: Tests and coverage
+  test-and-coverage:
+    name: Test and coverage
     runs-on: ubuntu-latest
     steps:
     # actions/checkout v6.0.2
