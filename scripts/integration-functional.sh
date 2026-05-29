@@ -32,6 +32,9 @@ stack_up
 echo "=== Waiting for Weblate ==="
 stack_wait_healthy "${HEALTH_TIMEOUT:-180}"
 
+echo "=== Configuring Weblate SSH known_hosts for GitHub ==="
+stack_ensure_github_known_hosts
+
 echo "=== Creating API token ==="
 WEBLATE_API_TOKEN="$(stack_create_token admin)"
 export WEBLATE_API_TOKEN
