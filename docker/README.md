@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2026 Andrew Zhang <whisper67265@outlook.com>
+SPDX-FileCopyrightText: 2026 William Jin <AuraMindNest@outlook.com>
 
 SPDX-License-Identifier: BSL-1.0
 -->
@@ -19,6 +19,7 @@ Shared Docker assets for CI and CD.
 docker compose -f docker/docker-compose.ci.yml build
 docker compose -f docker/docker-compose.ci.yml up -d
 
-# CD on deploy server (repo-root .env required; no secret defaults in compose):
+# CD on deploy server (copy ../.env.example to ../.env and edit secrets):
+cp .env.example .env
 docker compose -f docker/docker-compose.cd.yml --env-file .env up -d
 ```
