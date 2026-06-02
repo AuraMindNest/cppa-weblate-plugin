@@ -68,7 +68,7 @@ jobs:
         pr_body="$(printf '%s\n' \
           '## Summary' \
           '' \
-          'Automated Weblate pin bump (PyPI + Docker base image + `uv.lock`).' \
+          "Automated Weblate pin bump (PyPI + Docker base image + \`uv.lock\`)." \
           '' \
           '| | Version |' \
           '|---|---------|' \
@@ -76,7 +76,7 @@ jobs:
           "| Docker (\`Dockerfile.weblate-plugin\`) | \`weblate/weblate:${target_docker}\` |" \
           '' \
           'Docker tag follows Weblate fixed production format' \
-          '`YEAR.MONTH.PATCH.BUILD` (see Releasing Weblate docs).' \
+          "\`YEAR.MONTH.PATCH.BUILD\` (see Releasing Weblate docs)." \
           '' \
           '## Test plan' \
           '' \
