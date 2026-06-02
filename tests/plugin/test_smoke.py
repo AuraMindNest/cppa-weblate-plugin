@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSL-1.0
 
-"""P0 integration smoke tests.
+"""P0 plugin smoke tests.
 
 Verifies:
 - Container boots with plugin installed (no import errors, no AppRegistryNotReady)
@@ -18,9 +18,9 @@ from collections.abc import Callable
 
 import pytest
 
-from tests.integration.lib.http import http_get
+from tests.plugin.lib.http import http_get
 
-pytestmark = pytest.mark.integration
+pytestmark = pytest.mark.plugin
 
 # ---------------------------------------------------------------------------
 # P0: Container boot + plugin load

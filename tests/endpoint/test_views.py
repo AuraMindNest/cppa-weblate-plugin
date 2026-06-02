@@ -5,14 +5,20 @@
 from __future__ import annotations
 
 import importlib.metadata
+from contextlib import contextmanager
+from copy import deepcopy
 from unittest.mock import MagicMock
 
 import pytest
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.test import RequestFactory
+from django.core.cache import cache
+from django.test import RequestFactory, override_settings
 from rest_framework import status
+from rest_framework.settings import api_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
+from rest_framework.throttling import SimpleRateThrottle
 
 from boost_weblate.endpoint.views import (
     AddOrUpdateView,
@@ -21,6 +27,59 @@ from boost_weblate.endpoint.views import (
 )
 
 User = get_user_model()
+
+_ADD_OR_UPDATE_BODY = {
+    "organization": "o",
+    "version": "v",
+    "add_or_update": {"zh_Hans": ["json"]},
+}
+
+
+def _throttle_rest_framework(**rate_overrides: str) -> dict:
+    rf = deepcopy(settings.REST_FRAMEWORK)
+    rates = dict(rf.get("DEFAULT_THROTTLE_RATES", {}))
+    rates.update(rate_overrides)
+    rf["DEFAULT_THROTTLE_RATES"] = rates
+    return rf
+
+
+@contextmanager
+def _isolated_throttle_rates(rest_framework: dict):
+    """Apply REST_FRAMEWORK throttle rates; restore rates and cache after use."""
+    with override_settings(REST_FRAMEWORK=rest_framework):
+        orig = dict(SimpleRateThrottle.THROTTLE_RATES or {})
+        cache.clear()
+        try:
+            api_settings.reload()
+            SimpleRateThrottle.THROTTLE_RATES = dict(
+                api_settings.DEFAULT_THROTTLE_RATES or {}
+            )
+            yield
+        finally:
+            cache.clear()
+            SimpleRateThrottle.THROTTLE_RATES = orig
+            api_settings.reload()
+
+
+@pytest.fixture
+def scoped_low_throttle_rates():
+    rest_framework = _throttle_rest_framework(
+        user="10000/hour",
+        info="2/minute",
+        **{"add-or-update": "2/minute"},
+    )
+    with _isolated_throttle_rates(rest_framework):
+        yield
+
+
+@pytest.fixture
+def user_low_throttle_rates():
+    rest_framework = _throttle_rest_framework(
+        user="2/minute",
+        info="10000/minute",
+    )
+    with _isolated_throttle_rates(rest_framework):
+        yield
 
 
 @pytest.fixture
@@ -205,3 +264,73 @@ def test_boost_add_or_update_task_propagates_service_errors(
             extensions=None,
             user_id=1,
         )
+
+
+def test_boost_endpoint_info_returns_429_when_scoped_throttled(
+    scoped_low_throttle_rates,
+) -> None:
+    factory = APIRequestFactory()
+    user = User(username="t_throttle_info", pk=101)
+    view = BoostEndpointInfo.as_view()
+
+    for _ in range(2):
+        request = factory.get("/info/")
+        force_authenticate(request, user=user)
+        response = view(request)
+        assert response.status_code == status.HTTP_200_OK
+
+    request = factory.get("/info/")
+    force_authenticate(request, user=user)
+    response = view(request)
+    assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert "Retry-After" in response
+    assert int(response["Retry-After"]) > 0
+
+
+def test_add_or_update_returns_429_when_scoped_throttled(
+    scoped_low_throttle_rates,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delay_mock = MagicMock(return_value=MagicMock(id="task-uuid"))
+    monkeypatch.setattr(
+        "boost_weblate.endpoint.views.boost_add_or_update_task.delay",
+        delay_mock,
+    )
+
+    factory = APIRequestFactory()
+    user = User(username="t_throttle_aou", pk=102)
+    view = AddOrUpdateView.as_view()
+
+    for _ in range(2):
+        request = factory.post("/add-or-update/", _ADD_OR_UPDATE_BODY, format="json")
+        force_authenticate(request, user=user)
+        response = view(request)
+        assert response.status_code == status.HTTP_202_ACCEPTED
+
+    request = factory.post("/add-or-update/", _ADD_OR_UPDATE_BODY, format="json")
+    force_authenticate(request, user=user)
+    response = view(request)
+    assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert "Retry-After" in response
+    assert int(response["Retry-After"]) > 0
+    assert delay_mock.call_count == 2
+
+
+def test_boost_endpoint_info_user_throttle_can_429(
+    user_low_throttle_rates,
+) -> None:
+    factory = APIRequestFactory()
+    user = User(username="t_user_throttle", pk=103)
+    view = BoostEndpointInfo.as_view()
+
+    for _ in range(2):
+        request = factory.get("/info/")
+        force_authenticate(request, user=user)
+        response = view(request)
+        assert response.status_code == status.HTTP_200_OK
+
+    request = factory.get("/info/")
+    force_authenticate(request, user=user)
+    response = view(request)
+    assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert "Retry-After" in response
