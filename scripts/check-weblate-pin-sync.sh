@@ -14,7 +14,6 @@ DOCKER_FILE="${ROOT}/docker/Dockerfile.weblate-plugin"
 
 pypi_ver="$(parse_pypi_weblate_version "$PYPI_FILE")"
 docker_tag="$(parse_docker_weblate_tag "$DOCKER_FILE")"
-expected_docker="$(pypi_to_docker_fixed "$pypi_ver")"
 
 if [[ -z "$pypi_ver" ]]; then
   echo "ERROR: could not parse Weblate[all]==… from ${PYPI_FILE}" >&2
@@ -25,6 +24,8 @@ if [[ -z "$docker_tag" ]]; then
   echo "ERROR: could not parse FROM weblate/weblate:… from ${DOCKER_FILE}" >&2
   exit 1
 fi
+
+expected_docker="$(pypi_to_docker_fixed "$pypi_ver")"
 
 if [[ "$docker_tag" != "$expected_docker" ]]; then
   echo "ERROR: Weblate pin mismatch between PyPI and Docker base image." >&2
