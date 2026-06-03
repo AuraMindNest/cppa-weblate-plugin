@@ -60,7 +60,7 @@ if [[ -z "$current" ]]; then
   exit 1
 fi
 
-resolve_target() {
+list_weblate_pypi_candidates() {
   uv run --with packaging python3 - "$current" "$FORCE_VERSION" <<'PY'
 import json
 import re
@@ -79,20 +79,6 @@ def is_modern_calver(name: str) -> bool:
     year = int(name.split(".", 1)[0])
     return year >= 2020
 
-def pypi_to_docker_fixed(v: str) -> str:
-    parts = v.split(".")
-    year, month = parts[0], parts[1]
-    patch = parts[2] if len(parts) > 2 else "0"
-    return f"{year}.{month}.{patch}.0"
-
-def docker_tag_exists(tag: str) -> bool:
-    url = f"https://hub.docker.com/v2/repositories/weblate/weblate/tags/{tag}/"
-    try:
-        with urllib.request.urlopen(url) as resp:
-            return resp.status == 200
-    except urllib.error.HTTPError as exc:
-        return exc.code == 200
-
 with urllib.request.urlopen("https://pypi.org/pypi/Weblate/json") as resp:
     data = json.load(resp)
 
@@ -103,18 +89,40 @@ if force:
     if force not in releases:
         print(f"ERROR: PyPI release {force!r} not found", file=sys.stderr)
         sys.exit(1)
-    candidates = [force]
-else:
-    candidates = [v for v in releases if Version(v) > current]
+    print(force)
+    sys.exit(0)
+
+candidates = [v for v in releases if Version(v) > current]
+if not candidates:
+    sys.exit(3)
 
 for candidate in candidates:
-    docker_tag = pypi_to_docker_fixed(candidate)
-    if docker_tag_exists(docker_tag):
-        print(candidate)
-        sys.exit(0)
-
-sys.exit(3)
+    print(candidate)
 PY
+}
+
+resolve_target() {
+  local candidate docker_tag list_output list_status=0
+
+  list_output="$(list_weblate_pypi_candidates)" || list_status=$?
+
+  if [[ $list_status -eq 1 ]]; then
+    return 1
+  fi
+  if [[ $list_status -ne 0 ]] || [[ -z "$list_output" ]]; then
+    return 3
+  fi
+
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    docker_tag="$(pypi_to_docker_fixed "$candidate")"
+    if docker_weblate_tag_exists "$docker_tag"; then
+      echo "$candidate"
+      return 0
+    fi
+  done <<<"$list_output"
+
+  return 3
 }
 
 set +e
@@ -139,11 +147,6 @@ if [[ $resolve_status -ne 0 ]]; then
 fi
 
 target_docker="$(pypi_to_docker_fixed "$target_pypi")"
-
-if ! docker_weblate_tag_exists "$target_docker"; then
-  echo "ERROR: Docker tag weblate/weblate:${target_docker} not found for PyPI ${target_pypi}" >&2
-  exit 1
-fi
 
 if [[ "$target_pypi" == "$current" ]]; then
   echo "Already pinned to PyPI ${current} (Docker ${target_docker})."

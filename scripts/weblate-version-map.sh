@@ -32,7 +32,7 @@ parse_docker_weblate_tag() {
 docker_weblate_tag_exists() {
   local tag="$1"
   local code
-  code="$(curl -sS -o /dev/null -w '%{http_code}' \
+  code="$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' \
     "https://hub.docker.com/v2/repositories/weblate/weblate/tags/${tag}/")"
   [[ "$code" == "200" ]]
 }
