@@ -61,7 +61,7 @@ if [[ -z "$current" ]]; then
 fi
 
 resolve_target() {
-  python3 - "$current" "$FORCE_VERSION" <<'PY'
+  uv run --with packaging python3 - "$current" "$FORCE_VERSION" <<'PY'
 import json
 import re
 import sys

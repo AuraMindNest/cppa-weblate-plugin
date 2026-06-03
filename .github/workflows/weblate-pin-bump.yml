@@ -86,6 +86,7 @@ jobs:
           '- [ ] Plugin smoke / functional tests against new Weblate stack')"
         gh pr create \
           --title "chore(deps): bump Weblate pin to ${target_pypi}" \
+          --base develop \
           --label dependencies \
           --label weblate \
           --body "${pr_body}"
