@@ -8,10 +8,11 @@ name: CD
 #   - permissions: contents: read (no write access)
 #   - job-level 'if' requires conclusion == 'success' AND event == 'push'
 #     (ignores PRs, forks, and failed/cancelled runs)
+#   - head_branch limited to main or develop
 on:
   workflow_run:
     workflows: [CI]
-    branches: [develop]
+    branches: [main, develop]
     types: [completed]
 
 permissions:
@@ -26,26 +27,32 @@ jobs:
     if: >-
       github.event.workflow_run.conclusion == 'success'
       && github.event.workflow_run.event == 'push'
+      && (github.event.workflow_run.head_branch == 'main'
+          || github.event.workflow_run.head_branch == 'develop')
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: staging
+    environment: >-
+      ${{ github.event.workflow_run.head_branch == 'main' && 'production'
+          || 'staging' }}
     steps:
     - name: Deploy via SSH
       uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
       env:
+        BRANCH: ${{ github.event.workflow_run.head_branch }}
         WEBLATE_PORT: ${{ secrets.WEBLATE_PORT }}
         WEBLATE_URL_PREFIX: ${{ secrets.WEBLATE_URL_PREFIX }}
       with:
         host: ${{ secrets.SSH_HOST }}
         username: ${{ secrets.SSH_USER }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
-        envs: WEBLATE_PORT,WEBLATE_URL_PREFIX
+        port: ${{ secrets.SSH_PORT || '22' }}
+        envs: BRANCH,WEBLATE_PORT,WEBLATE_URL_PREFIX
         script: |
           set -euo pipefail
           cd /opt/cppa-weblate-plugin
-          git fetch origin develop
-          git checkout develop
-          git pull origin develop
+          git fetch origin "$BRANCH"
+          git checkout "$BRANCH"
+          git pull origin "$BRANCH"
           docker compose -f docker/docker-compose.cd.yml --env-file .env build
           docker compose -f docker/docker-compose.cd.yml --env-file .env up -d
           WEBLATE_PORT="${WEBLATE_PORT:-8080}"
