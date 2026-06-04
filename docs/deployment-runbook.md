@@ -211,15 +211,77 @@ docker compose -f docker/docker-compose.cd.yml --env-file .env \
 
 ## Automated CD Flow
 
-The full pipeline (`cd.yml`) triggers on a successful CI run against `develop`:
+Deploy is handled by [`cd.yml`](../.github/workflows/cd.yml) after a successful **CI** run on a **push** to `develop` or `main`. The GitHub environment (`staging` or `production`) and git branch on the server follow the CI branch.
 
-1. SSH to the deploy server
-2. `git pull origin develop`
-3. `docker compose … build && up -d`
+| Branch | Trigger | GitHub environment | Server branch |
+|--------|---------|-------------------|---------------|
+| `develop` | Push to `develop` → CI → `cd.yml` | `staging` | `develop` |
+| `main` | Promote (below) → CI on `main` → `cd.yml` | `production` | `main` |
+
+Each deploy job:
+
+1. SSH to the deploy server (`/opt/cppa-weblate-plugin`)
+2. `git fetch` / `checkout` / `pull` the CI branch
+3. `docker compose -f docker/docker-compose.cd.yml --env-file .env build && up -d`
 4. Poll `${WEBLATE_URL_PREFIX}/healthz/` on `WEBLATE_PORT` for up to 180 s
 5. On failure: dump the last 40 lines of container logs and exit non-zero
 
-Concurrency is locked per branch (`cancel-in-progress: false`) so deploys never overlap.
+Concurrency is locked per branch (`cancel-in-progress: false`) so staging and production deploys do not overlap on the same branch group.
+
+### Staging (`develop`)
+
+Merge or push to `develop`. When CI succeeds, `cd.yml` deploys using **staging** environment secrets.
+
+### Production (`main`)
+
+1. Validate on staging (`develop` CI + deploy).
+2. Ensure `main` can fast-forward to `develop` (`main` is an ancestor of `develop`, or equal).
+3. Run **Actions → Promote develop to main** ([`promote-main.yml`](../.github/workflows/promote-main.yml)).
+4. The workflow ff-only merges `origin/develop` into `main` and pushes with **`PROMOTE_PAT`** (repository secret).
+5. That push runs CI on `main`; when CI succeeds, `cd.yml` deploys using **production** environment secrets.
+
+#### Why `PROMOTE_PAT` is required
+
+`promote-main.yml` is started with `workflow_dispatch`, but the push to `main` must use a **PAT**, not the default `GITHUB_TOKEN`. GitHub does not run `push`-triggered workflows (including CI and `cd.yml`’s `workflow_run`) for commits pushed with `GITHUB_TOKEN`.
+
+Configure a classic or fine-grained PAT with **Contents: write** on this repository and store it as the **`PROMOTE_PAT`** repository secret.
+
+#### Fast-forward failure
+
+If `main` has diverged from `develop`, `git merge --ff-only` fails. Resolve locally (rebase or reset `main` to match your release policy), then re-run the promote workflow.
+
+### GitHub environments and secrets
+
+| Environment | Used when | Secrets (same names per environment) |
+|-------------|-----------|-------------------------------------|
+| `staging` | CI on `develop` | `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, `WEBLATE_PORT`, `WEBLATE_URL_PREFIX`; optional `SSH_PORT` |
+| `production` | CI on `main` | Same names; production host values |
+
+Optional: enable required reviewers on the `production` environment.
+
+### Rollback (production or staging)
+
+On the deploy server:
+
+```bash
+cd /opt/cppa-weblate-plugin
+git fetch origin
+git checkout <previous-tag-or-sha>
+docker compose -f docker/docker-compose.cd.yml --env-file .env build
+docker compose -f docker/docker-compose.cd.yml --env-file .env up -d
+# Re-run health poll from "External health poll" above
+```
+
+Reverting the server does not automatically move `main` or `develop` on GitHub; fix branch tips separately if needed.
+
+### CD failure modes
+
+| Failure | Likely cause |
+|---------|----------------|
+| Deploy skipped after promote | `PROMOTE_PAT` missing or push used `GITHUB_TOKEN`; CI on `main` never ran |
+| FF-only merge failed | `main` diverged from `develop` |
+| Health check timeout | Weblate boot/migrations, Postgres, Redis, or URL prefix mismatch |
+| Wrong environment deployed | CI ran on unexpected branch; check workflow run `head_branch` |
 
 ## Release tagging
 

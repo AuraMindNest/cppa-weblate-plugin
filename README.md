@@ -44,9 +44,9 @@ docker compose -f docker/docker-compose.ci.yml up -d
 
 Weblate is available at `http://localhost:8080` once the healthcheck passes (admin / `admin`). The CI stack uses ephemeral Postgres on tmpfs — data does not persist across restarts.
 
-### Docker (CD / staging)
+### Docker (CD / staging and production)
 
-For persistent deployment with host PostgreSQL and shared Redis, see [docs/deployment-runbook.md](docs/deployment-runbook.md). Quick version:
+For persistent deployment with host PostgreSQL and shared Redis, see [docs/deployment-runbook.md](docs/deployment-runbook.md) (staging auto-deploy on `develop`, production via promote + `main` deploy). Quick version:
 
 ```bash
 cp .env.example .env          # fill in secrets; see .env.example comments
@@ -78,7 +78,7 @@ flowchart TB
   FMT --> CF
   FMT --> UTL
   INST --> EP
-  EP -->|AppConfig.ready()| RP
+  EP -->|"AppConfig ready"| RP
   EP -->|add-or-update| CEL
   CEL --> EP
 ```
@@ -142,11 +142,11 @@ Note that adding the app to `INSTALLED_APPS` (by either method) is **necessary b
 
 The plugin exposes three HTTP endpoints, all under the `/boost-endpoint/` prefix on the Weblate site:
 
-| Method | Path | Handler | Auth | Response |
-|--------|------|---------|------|----------|
-| `GET` | `/boost-endpoint/plugin-ping/` | `plugin_ping` | None | `200 ok` (plain text) |
-| `GET` | `/boost-endpoint/info/` | `BoostEndpointInfo` | Required | `200` JSON: `module`, `version`, `capabilities` |
-| `POST` | `/boost-endpoint/add-or-update/` | `AddOrUpdateView` | Required | `202` JSON: `status`, `task_id`, `detail` |
+| Method | Path | Handler | Auth | Rate limit | Response |
+|--------|------|---------|------|------------|----------|
+| `GET` | `/boost-endpoint/plugin-ping/` | `plugin_ping` | None | None | `200 ok` (plain text) |
+| `GET` | `/boost-endpoint/info/` | `BoostEndpointInfo` | Required | Scoped `info` (+ Weblate `UserRateThrottle`) | `200` JSON: `module`, `version`, `capabilities`; `429` with `Retry-After` when throttled |
+| `POST` | `/boost-endpoint/add-or-update/` | `AddOrUpdateView` | Required | Scoped `add-or-update` (+ `UserRateThrottle`) | `202` JSON: `status`, `task_id`, `detail`; `429` with `Retry-After` when throttled |
 
 When `WEBLATE_URL_PREFIX` is set (e.g. `/weblate`), all paths are prefixed accordingly: `/weblate/boost-endpoint/plugin-ping/`, etc.
 
@@ -201,6 +201,30 @@ The operation is idempotent (guarded by a `_cppa_boost_weblate_urls_registered` 
 ```
 
 The view validates the request with `AddOrUpdateRequestSerializer`, dispatches the Celery task, and returns immediately. A `400` response with an `errors` object is returned if validation fails.
+
+## Rate Limiting
+
+Protected Boost endpoint views use Django REST Framework throttling merged in [`src/boost_weblate/settings_override.py`](src/boost_weblate/settings_override.py):
+
+| Scope | Default rate | View | Throttle classes |
+|-------|--------------|------|------------------|
+| `info` | `60/minute` | `BoostEndpointInfo` | `UserRateThrottle`, `BoostEndpointInfoThrottle` |
+| `add-or-update` | `10/hour` | `AddOrUpdateView` | `UserRateThrottle`, `AddOrUpdateThrottle` |
+
+`BoostEndpointInfoThrottle` and `AddOrUpdateThrottle` subclass DRF `ScopedRateThrottle` and use Weblate’s `@patch_throttle_request` so throttling respects upstream request context.
+
+**Configuration:** defaults live in `settings_override.py`. Override at deploy time with environment variables (read when the override `exec()` runs):
+
+| Variable | Scope | Default |
+|----------|-------|---------|
+| `BOOST_ENDPOINT_THROTTLE_INFO` | `info` | `60/minute` |
+| `BOOST_ENDPOINT_THROTTLE_ADD_OR_UPDATE` | `add-or-update` | `10/hour` |
+
+Rates are merged into `REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]` via `merge_boost_endpoint_throttle_rates()`.
+
+**When limited:** clients receive HTTP **`429 Too Many Requests`**. Responses include a **`Retry-After`** header (seconds until retry). DRF may also include wait time in the JSON `errors` detail. `plugin-ping` is not throttled.
+
+Plugin tests: [`tests/plugin/test_rate_limit.py`](tests/plugin/test_rate_limit.py).
 
 ## Celery Requirement for add-or-update
 
@@ -257,7 +281,7 @@ The service has no plugin-owned models; it operates entirely through Weblate's D
 
 ### CI (`ci.yml`)
 
-Triggered on push and PR to `main` and `develop`. Calls seven reusable sub-workflows:
+Triggered on push and PR to `main` and `develop`. Calls eight reusable sub-workflows:
 
 | Job | Workflow | What it checks |
 |-----|----------|----------------|
@@ -265,17 +289,36 @@ Triggered on push and PR to `main` and `develop`. Calls seven reusable sub-workf
 | `test` | [`.github/workflows/ci-test.yml`](.github/workflows/ci-test.yml) | pytest + 90% coverage gate (`--cov-fail-under=90`) |
 | `package` | [`.github/workflows/ci-package.yml`](.github/workflows/ci-package.yml) | `uv build`, twine, pydistcheck, pyroma, check-wheel-contents, check-manifest |
 | `dependencies` | [`.github/workflows/ci-dependencies.yml`](.github/workflows/ci-dependencies.yml) | pip-audit, liccheck, dependency review (on PRs) |
+| `weblate-pin` | [`.github/workflows/ci-weblate-pin.yml`](.github/workflows/ci-weblate-pin.yml) | PyPI `Weblate[all]==…` in `pyproject.toml` matches Docker `FROM weblate/weblate:…` (`scripts/check-weblate-pin-sync.sh`) |
 | `plugin-smoke` | [`.github/workflows/ci-plugin-smoke.yml`](.github/workflows/ci-plugin-smoke.yml) | Docker stack → P0 smoke tests (`scripts/plugin-smoke.sh`) |
 | `plugin-auth` | [`.github/workflows/ci-plugin-auth.yml`](.github/workflows/ci-plugin-auth.yml) | Docker stack → auth tests (`scripts/plugin-auth.sh`) |
 | `plugin-functional` | [`.github/workflows/ci-plugin-functional.yml`](.github/workflows/ci-plugin-functional.yml) | Docker stack → E2E functional tests (`scripts/plugin-functional.sh`); optional `GH_TEST_REPO_TOKEN` secret for GitHub-backed tests |
 
 All `ci-plugin-*` jobs build the CI Docker stack (`docker/docker-compose.ci.yml`), wait for the healthcheck, create an API token, run the corresponding pytest suite under `tests/plugin/`, and tear down.
 
-### CD (`cd.yml`)
+[`weblate-pin-bump.yml`](.github/workflows/weblate-pin-bump.yml) runs on a schedule (Monday 09:00 UTC) and opens a PR when a newer PyPI Weblate release has a matching Docker fixed tag. See [`.github/README.md`](.github/README.md#weblate-version-pinning).
 
-Triggered after CI succeeds on a `develop` push. SSHes into the staging server at `/opt/cppa-weblate-plugin`, pulls the latest code, rebuilds the CD Docker image (`docker/docker-compose.cd.yml`), brings the stack up, and polls `${WEBLATE_URL_PREFIX}/healthz/` on `WEBLATE_PORT` (from `.env`) for up to 180 s. On failure, logs the last 40 lines and exits non-zero. Concurrency is locked per branch so deploys never overlap.
+### CD (`cd.yml`) and production promotion (`promote-main.yml`)
 
-Full deployment procedure: [docs/deployment-runbook.md](docs/deployment-runbook.md).
+[`cd.yml`](.github/workflows/cd.yml) deploys after a successful **CI** run on a **push** to `develop` or `main`. The GitHub environment and git branch on the server match the CI branch:
+
+| Path | Trigger | Environment | Server branch |
+|------|---------|-------------|---------------|
+| **Staging** | Push to `develop` → CI → `cd.yml` | `staging` | `develop` |
+| **Production** | [`promote-main.yml`](.github/workflows/promote-main.yml) → CI on `main` → `cd.yml` | `production` | `main` |
+
+Each deploy SSHes to `/opt/cppa-weblate-plugin`, pulls the branch, rebuilds with `docker/docker-compose.cd.yml`, brings the stack up, and polls `${WEBLATE_URL_PREFIX}/healthz/` on `WEBLATE_PORT` for up to 180 s. On failure, logs the last 40 lines and exits non-zero. Concurrency is locked per branch (`deploy-<branch>`).
+
+**Staging** is fully automatic on `develop` pushes.
+
+**Production** uses two steps:
+
+1. **Promote** — run **Actions → Promote develop to main** ([`promote-main.yml`](.github/workflows/promote-main.yml)): fast-forward `main` to `develop` and push with repository secret **`PROMOTE_PAT`** (required so CI and deploy workflows run; `GITHUB_TOKEN` pushes do not trigger them).
+2. **Deploy** — when CI on `main` succeeds, `cd.yml` deploys using **production** environment secrets (`SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, `WEBLATE_PORT`, `WEBLATE_URL_PREFIX`; optional `SSH_PORT`).
+
+**Release** tagging ([`release.yml`](.github/workflows/release.yml)) is independent of deploy — run manually when you want a GitHub Release on `main`.
+
+Full deployment and promotion procedure: [docs/deployment-runbook.md](docs/deployment-runbook.md) (staging, production, `PROMOTE_PAT`, rollback, release tagging).
 
 ### Running plugin tests locally
 
@@ -299,11 +342,14 @@ Each script builds `docker/docker-compose.ci.yml`, waits for health, runs its py
 | Topic | File | Description |
 |-------|------|-------------|
 | All env vars | [`.env.example`](.env.example) | Annotated template — copy to `.env` on the deploy server |
-| Deployment steps | [`docs/deployment-runbook.md`](docs/deployment-runbook.md) | Install, env vars, health checks, troubleshooting |
+| Deployment & promotion | [`docs/deployment-runbook.md`](docs/deployment-runbook.md) | Staging/production CD, `PROMOTE_PAT`, environments, health checks, rollback, release tagging |
+| Boost endpoint throttles | [`src/boost_weblate/settings_override.py`](src/boost_weblate/settings_override.py) | `BOOST_ENDPOINT_THROTTLE_INFO`, `BOOST_ENDPOINT_THROTTLE_ADD_OR_UPDATE`; merged into `REST_FRAMEWORK` |
+| Weblate version pins | [`pyproject.toml`](pyproject.toml), [`docker/Dockerfile.weblate-plugin`](docker/Dockerfile.weblate-plugin) | PyPI and Docker pins kept in sync; CI [`ci-weblate-pin.yml`](.github/workflows/ci-weblate-pin.yml); scheduled bumps via [`weblate-pin-bump.yml`](.github/workflows/weblate-pin-bump.yml) |
+| Weblate pin scripts | [`scripts/weblate-version-map.sh`](scripts/weblate-version-map.sh), [`scripts/check-weblate-pin-sync.sh`](scripts/check-weblate-pin-sync.sh) | Calver mapping; CI check via [`ci-weblate-pin.yml`](.github/workflows/ci-weblate-pin.yml) |
 | API reference | [`docs/boost-endpoint-api.md`](docs/boost-endpoint-api.md) | Full request/response docs for the Boost endpoint |
 | Route registration | [`docs/plugin-http-routes.md`](docs/plugin-http-routes.md) | How and why routes are registered at startup |
 | Docker files | [`docker/README.md`](docker/README.md) | Dockerfile and Compose usage for CI and CD |
-| CI/CD workflows | [`.github/README.md`](.github/README.md) | Workflow index and secrets reference |
+| CI/CD workflows | [`.github/README.md`](.github/README.md) | Workflow index, staging/production secrets, `PROMOTE_PAT` |
 
 ## Contributing
 

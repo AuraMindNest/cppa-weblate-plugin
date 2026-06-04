@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 William Jin <AuraMindNest@outlook.com>
+#
+# SPDX-License-Identifier: BSL-1.0
+
+# Manual promotion: fast-forward main to match develop (--ff-only).
+# Fails if main has diverged (no merge commit; main tip equals develop after success).
+#
+# Push uses PROMOTE_PAT so CI and CD (workflow_run) still run — GITHUB_TOKEN
+# pushes do not trigger follow-on workflows.
+#
+# Requires repository secret: PROMOTE_PAT (classic or fine-grained PAT with Contents: write).
+
+name: Promote develop to main
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: promote-production
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+    # actions/checkout v6.0.2
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: main
+        fetch-depth: 0
+        token: ${{ secrets.PROMOTE_PAT }}
+        persist-credentials: true
+
+    - name: Fast-forward main to develop and push
+      run: |
+        set -euo pipefail
+        git fetch origin develop
+        git merge --ff-only origin/develop
+        git push origin main
