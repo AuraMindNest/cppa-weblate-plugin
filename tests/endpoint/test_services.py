@@ -4,17 +4,21 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 import subprocess
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from boost_weblate.endpoint.errors import BoostEndpointErrorCode
 from boost_weblate.endpoint.services import (
     BoostComponentService,
     _build_extension_to_format,
+    _git_commit_and_push_removals,
     _submodule_slug,
     truncate_component_name,
     truncate_component_slug,
@@ -23,6 +27,11 @@ from boost_weblate.endpoint.services import (
 # ---------------------------------------------------------------------------
 # Pure-Python helpers (no Weblate ORM needed)
 # ---------------------------------------------------------------------------
+
+
+def _has_error_code(errors: list, code: BoostEndpointErrorCode | str) -> bool:
+    expected = code.value if isinstance(code, BoostEndpointErrorCode) else code
+    return any(e.get("code") == expected for e in errors)
 
 
 class TestSubmoduleSlug:
@@ -723,6 +732,61 @@ class TestAddLanguageToComponent:
 
 
 # ---------------------------------------------------------------------------
+# _git_commit_and_push_removals
+# ---------------------------------------------------------------------------
+
+
+class TestGitCommitAndPushRemovals:
+    def test_commit_limits_paths_to_removed_files(self) -> None:
+        mock_status = MagicMock()
+        mock_status.returncode = 0
+        mock_status.stdout = "D zh_Hans/intro.adoc\n"
+
+        with patch("boost_weblate.endpoint.services.subprocess.run") as mock_run:
+            mock_run.side_effect = [MagicMock(), mock_status, MagicMock()]
+            ok, err, committed = _git_commit_and_push_removals(
+                "/repo",
+                ["zh_Hans/intro.adoc", "zh_Hans/other.adoc"],
+                name="TestComp",
+                push_url=None,
+                push_branch=None,
+            )
+
+        assert ok is True
+        assert err is None
+        assert committed is True
+        commit_args = mock_run.call_args_list[2].args[0]
+        assert commit_args[3] == "commit"
+        sep = commit_args.index("--")
+        assert commit_args[sep + 1 :] == [
+            "zh_Hans/intro.adoc",
+            "zh_Hans/other.adoc",
+        ]
+
+    def test_git_status_failure_returns_error(self) -> None:
+        mock_status = MagicMock()
+        mock_status.returncode = 128
+        mock_status.stderr = "fatal: not a git repository"
+
+        with patch("boost_weblate.endpoint.services.subprocess.run") as mock_run:
+            mock_run.side_effect = [MagicMock(), mock_status]
+            ok, err, committed = _git_commit_and_push_removals(
+                "/repo",
+                ["zh_Hans/intro.adoc"],
+                name="TestComp",
+                push_url=None,
+                push_branch=None,
+            )
+
+        assert ok is False
+        assert committed is False
+        assert err is not None
+        assert err["code"] == BoostEndpointErrorCode.GIT_PUSH_FAILED.value
+        assert err["metadata"]["returncode"] == 128
+        assert mock_run.call_count == 2
+
+
+# ---------------------------------------------------------------------------
 # _delete_component_and_commit_removal (mocks component + subprocess)
 # ---------------------------------------------------------------------------
 
@@ -759,10 +823,27 @@ class TestDeleteComponentAndCommitRemoval:
         component.translation_set.exclude.return_value = translations
         return component
 
+    def _git_success_side_effect(self):
+        mock_status = MagicMock()
+        mock_status.returncode = 0
+        mock_status.stdout = "D zh_Hans/intro.adoc\n"
+        return [MagicMock(), mock_status, MagicMock(), MagicMock()]
+
+    def _git_push_failure_side_effect(self):
+        mock_status = MagicMock()
+        mock_status.returncode = 0
+        mock_status.stdout = "D zh_Hans/intro.adoc\n"
+        err = subprocess.CalledProcessError(1, "git", stderr="push failed")
+        return [MagicMock(), mock_status, MagicMock(), err, MagicMock()]
+
     def test_increments_components_deleted(self) -> None:
         component = self._make_component()
         result = {"components_deleted": 0, "errors": []}
-        self.svc._delete_component_and_commit_removal(component, result)
+        with patch(
+            "boost_weblate.endpoint.services.transaction.atomic",
+            return_value=nullcontext(),
+        ):
+            self.svc._delete_component_and_commit_removal(component, result)
         assert result["components_deleted"] == 1
         component.delete.assert_called_once()
 
@@ -770,8 +851,13 @@ class TestDeleteComponentAndCommitRemoval:
         component = self._make_component(is_repo_link=True)
         component.linked_component = None
         result = {"components_deleted": 0, "errors": []}
-        self.svc._delete_component_and_commit_removal(component, result)
+        with patch(
+            "boost_weblate.endpoint.services.transaction.atomic",
+            return_value=nullcontext(),
+        ):
+            self.svc._delete_component_and_commit_removal(component, result)
         assert result["components_deleted"] == 1
+        component.delete.assert_called_once()
 
     def test_git_subprocess_called_when_files_removed(self) -> None:
         component = self._make_component(translation_files=["zh_Hans/intro.adoc"])
@@ -783,13 +869,38 @@ class TestDeleteComponentAndCommitRemoval:
             patch("os.path.isdir", return_value=True),
             patch("os.path.relpath", return_value="zh_Hans/intro.adoc"),
             patch("boost_weblate.endpoint.services.subprocess.run") as mock_run,
+            patch(
+                "boost_weblate.endpoint.services.transaction.atomic",
+                return_value=nullcontext(),
+            ),
         ):
-            mock_status = MagicMock()
-            mock_status.stdout = "D zh_Hans/intro.adoc\n"
-            mock_run.side_effect = [MagicMock(), mock_status, MagicMock(), MagicMock()]
+            mock_run.side_effect = self._git_success_side_effect()
             self.svc._delete_component_and_commit_removal(component, result)
 
         assert mock_run.called
+        component.delete.assert_called_once()
+
+    def test_push_success_deletes_component(self) -> None:
+        component = self._make_component(translation_files=["zh_Hans/intro.adoc"])
+        result = {"components_deleted": 0, "errors": []}
+
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch("os.remove"),
+            patch("os.path.isdir", return_value=True),
+            patch("os.path.relpath", return_value="zh_Hans/intro.adoc"),
+            patch("boost_weblate.endpoint.services.subprocess.run") as mock_run,
+            patch(
+                "boost_weblate.endpoint.services.transaction.atomic",
+                return_value=nullcontext(),
+            ),
+        ):
+            mock_run.side_effect = self._git_success_side_effect()
+            self.svc._delete_component_and_commit_removal(component, result)
+
+        assert result["components_deleted"] == 1
+        assert result["errors"] == []
+        component.delete.assert_called_once()
 
     def test_subprocess_error_appended_to_errors(self) -> None:
         component = self._make_component(translation_files=["zh_Hans/intro.adoc"])
@@ -802,11 +913,31 @@ class TestDeleteComponentAndCommitRemoval:
             patch("os.path.relpath", return_value="zh_Hans/intro.adoc"),
             patch("boost_weblate.endpoint.services.subprocess.run") as mock_run,
         ):
-            err = subprocess.CalledProcessError(1, "git", stderr="push failed")
-            mock_run.side_effect = err
+            mock_run.side_effect = self._git_push_failure_side_effect()
             self.svc._delete_component_and_commit_removal(component, result)
 
-        assert any("Git commit/push failed" in e for e in result["errors"])
+        assert _has_error_code(result["errors"], BoostEndpointErrorCode.GIT_PUSH_FAILED)
+        assert result["components_deleted"] == 0
+        component.delete.assert_not_called()
+
+    def test_push_failure_restores_working_tree(self) -> None:
+        component = self._make_component(translation_files=["zh_Hans/intro.adoc"])
+        result = {"components_deleted": 0, "errors": []}
+
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch("os.remove"),
+            patch("os.path.isdir", return_value=True),
+            patch("os.path.relpath", return_value="zh_Hans/intro.adoc"),
+            patch("boost_weblate.endpoint.services.subprocess.run") as mock_run,
+        ):
+            mock_run.side_effect = self._git_push_failure_side_effect()
+            self.svc._delete_component_and_commit_removal(component, result)
+
+        restore_call = mock_run.call_args_list[-1]
+        restore_args = restore_call.args[0]
+        assert restore_args[:4] == ["git", "-C", "/fake/path", "reset"]
+        assert restore_args[4:6] == ["--hard", "HEAD~1"]
 
     def test_subprocess_timeout_appended_to_errors(self) -> None:
         component = self._make_component(translation_files=["zh_Hans/intro.adoc"])
@@ -822,7 +953,11 @@ class TestDeleteComponentAndCommitRemoval:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="git", timeout=60)
             self.svc._delete_component_and_commit_removal(component, result)
 
-        assert any("timeout" in e.lower() for e in result["errors"])
+        assert _has_error_code(
+            result["errors"], BoostEndpointErrorCode.GIT_PUSH_TIMEOUT
+        )
+        assert result["components_deleted"] == 0
+        component.delete.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -835,28 +970,31 @@ class TestProcessSubmodule:
         self.svc = _make_svc()
 
     def test_raises_typeerror_without_temp_dir(self) -> None:
-        with pytest.raises(TypeError, match="process_submodule requires temp_dir"):
+        sig = inspect.signature(self.svc.process_submodule)
+        assert sig.parameters["temp_dir"].default is inspect.Parameter.empty
+        with pytest.raises(
+            TypeError, match="missing .* required .* argument.*temp_dir"
+        ):
             self.svc.process_submodule("json")
 
     def test_clone_failure_returns_error_result(self, tmp_path) -> None:
-        self.svc.temp_dir = str(tmp_path)
         with patch.object(self.svc, "clone_repository", return_value=False):
-            result = self.svc.process_submodule("json")
+            result = self.svc.process_submodule("json", str(tmp_path))
         assert result["success"] is False
-        assert any("clone" in e.lower() for e in result["errors"])
+        assert _has_error_code(result["errors"], BoostEndpointErrorCode.CLONE_FAILED)
 
     def test_no_docs_found_returns_error(self, tmp_path) -> None:
-        self.svc.temp_dir = str(tmp_path)
         with (
             patch.object(self.svc, "clone_repository", return_value=True),
             patch.object(self.svc, "scan_documentation_files", return_value=[]),
         ):
-            result = self.svc.process_submodule("json")
+            result = self.svc.process_submodule("json", str(tmp_path))
         assert result["success"] is False
-        assert any("no supported" in e.lower() for e in result["errors"])
+        assert _has_error_code(
+            result["errors"], BoostEndpointErrorCode.NO_DOCUMENTATION_FILES
+        )
 
     def test_permission_denied_project_add(self, tmp_path) -> None:
-        self.svc.temp_dir = str(tmp_path)
         user = MagicMock()
         user.has_perm.return_value = False
         request = MagicMock()
@@ -868,13 +1006,20 @@ class TestProcessSubmodule:
             patch("boost_weblate.endpoint.services.Project") as MockProject,
         ):
             MockProject.objects.filter.return_value.first.return_value = None
-            result = self.svc.process_submodule("json", user=user, request=request)
+            result = self.svc.process_submodule(
+                "json", str(tmp_path), user=user, request=request
+            )
 
         assert result["success"] is False
-        assert any("project.add" in e for e in result["errors"])
+        assert _has_error_code(
+            result["errors"], BoostEndpointErrorCode.PERMISSION_DENIED
+        )
+        assert any(
+            e.get("metadata", {}).get("permission") == "project.add"
+            for e in result["errors"]
+        )
 
     def test_permission_denied_project_edit(self, tmp_path) -> None:
-        self.svc.temp_dir = str(tmp_path)
         user = MagicMock()
         user.has_perm.side_effect = lambda perm, *args: False
         request = MagicMock()
@@ -889,13 +1034,20 @@ class TestProcessSubmodule:
             MockProject.objects.filter.return_value.first.return_value = (
                 existing_project
             )
-            result = self.svc.process_submodule("json", user=user, request=request)
+            result = self.svc.process_submodule(
+                "json", str(tmp_path), user=user, request=request
+            )
 
         assert result["success"] is False
-        assert any("project.edit" in e for e in result["errors"])
+        assert _has_error_code(
+            result["errors"], BoostEndpointErrorCode.PERMISSION_DENIED
+        )
+        assert any(
+            e.get("metadata", {}).get("permission") == "project.edit"
+            for e in result["errors"]
+        )
 
     def test_get_or_create_project_exception(self, tmp_path) -> None:
-        self.svc.temp_dir = str(tmp_path)
         configs = [{"component_slug": "x"}]
 
         with (
@@ -908,13 +1060,14 @@ class TestProcessSubmodule:
             patch("boost_weblate.endpoint.services.report_error"),
         ):
             MockProject.objects.filter.return_value.first.return_value = None
-            result = self.svc.process_submodule("json")
+            result = self.svc.process_submodule("json", str(tmp_path))
 
         assert result["success"] is False
-        assert any("Failed to create project" in e for e in result["errors"])
+        assert _has_error_code(
+            result["errors"], BoostEndpointErrorCode.PROJECT_CREATE_FAILED
+        )
 
     def test_successful_submodule_creates_component(self, tmp_path) -> None:
-        self.svc.temp_dir = str(tmp_path)
         project = MagicMock()
         project.component_set.all.return_value = []
         component = MagicMock()
@@ -939,16 +1092,17 @@ class TestProcessSubmodule:
             patch("boost_weblate.endpoint.services.Project") as MockProject,
         ):
             MockProject.objects.filter.return_value.first.return_value = None
-            result = self.svc.process_submodule("json")
+            result = self.svc.process_submodule("json", str(tmp_path))
 
         assert result["success"] is True
         assert result["components_created"] == 1
 
     def test_invalid_submodule_name_path_traversal(self, tmp_path) -> None:
-        self.svc.temp_dir = str(tmp_path)
-        result = self.svc.process_submodule("../evil")
+        result = self.svc.process_submodule("../evil", str(tmp_path))
         assert result["success"] is False
-        assert any("Invalid submodule" in e for e in result["errors"])
+        assert _has_error_code(
+            result["errors"], BoostEndpointErrorCode.INVALID_SUBMODULE
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -974,7 +1128,7 @@ class TestProcessAll:
         sub = results["submodule_results"][0]
         assert sub["submodule"] == "json"
         assert sub["success"] is False
-        assert any("clone" in err.lower() for err in sub["errors"])
+        assert _has_error_code(sub["errors"], BoostEndpointErrorCode.CLONE_FAILED)
 
     def test_multiple_submodules_counted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         svc = _make_svc()
@@ -997,7 +1151,7 @@ class TestProcessAll:
         captured_dir = []
 
         def recording_process_submodule(*args, **kwargs):
-            captured_dir.append(svc.temp_dir)
+            captured_dir.append(kwargs.get("temp_dir", args[1]))
             return {
                 "submodule": args[0],
                 "success": True,
@@ -1020,7 +1174,7 @@ class TestProcessAll:
         svc = _make_svc()
         call_count = [0]
 
-        def mock_process_submodule(sub, user=None, request=None):
+        def mock_process_submodule(sub, temp_dir, user=None, request=None):
             call_count[0] += 1
             success = call_count[0] % 2 == 0  # even calls succeed
             return {
@@ -1030,7 +1184,15 @@ class TestProcessAll:
                 "components_updated": 0,
                 "components_failed": 0 if success else 1,
                 "components_deleted": 0,
-                "errors": [] if success else ["fail"],
+                "errors": []
+                if success
+                else [
+                    {
+                        "code": "task_internal_error",
+                        "message": "fail",
+                        "metadata": {},
+                    }
+                ],
             }
 
         monkeypatch.setattr(svc, "process_submodule", mock_process_submodule)

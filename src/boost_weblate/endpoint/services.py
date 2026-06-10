@@ -45,6 +45,12 @@ from weblate.trans.models import Component, Project
 from weblate.utils.errors import report_error
 from weblate.vcs.base import RepositoryError
 
+from boost_weblate.endpoint.errors import (
+    BoostEndpointErrorCode,
+    append_error,
+    to_error_dict,
+)
+
 if TYPE_CHECKING:
     from weblate.lang.models import LanguageQuerySet
 
@@ -100,6 +106,152 @@ def truncate_component_slug(slug: str, max_len: int = MAX_COMPONENT_SLUG_LENGTH)
     return slug[:head_len] + hash_suffix
 
 
+def _git_commit_and_push_removals(
+    base_path: str,
+    rel_paths: list[str],
+    *,
+    name: str,
+    push_url: str | None,
+    push_branch: str | None,
+) -> tuple[bool, dict[str, Any] | None, bool]:
+    """
+    Stage removed files, commit, and optionally push.
+
+    Returns (success, error_dict, committed). ``committed`` is True when a
+    local commit was created (used to choose rollback strategy on push failure).
+    """
+    committed = False
+    try:
+        subprocess.run(
+            ["git", "-C", base_path, "add", "--", *rel_paths],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+        git_status = subprocess.run(
+            ["git", "-C", base_path, "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if git_status.returncode != 0:
+            stderr = (git_status.stderr or "").strip()
+            LOGGER.warning(
+                "Git status failed for %s (exit %s): %s",
+                name,
+                git_status.returncode,
+                stderr,
+            )
+            return (
+                False,
+                to_error_dict(
+                    BoostEndpointErrorCode.GIT_PUSH_FAILED,
+                    f"Git status failed (exit {git_status.returncode}): {stderr}",
+                    component_name=name,
+                    stderr=stderr[:500],
+                    returncode=git_status.returncode,
+                ),
+                committed,
+            )
+        if git_status.stdout.strip():
+            committer = getattr(settings, "DEFAULT_COMMITER_NAME", "Weblate")
+            email = getattr(
+                settings,
+                "DEFAULT_COMMITER_EMAIL",
+                "noreply@weblate.org",
+            )
+            author = f"{committer} <{email}>"
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    base_path,
+                    "commit",
+                    "-m",
+                    f"Remove translation files for deleted component: {name}",
+                    "--author",
+                    author,
+                    "--",
+                    *rel_paths,
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            committed = True
+            LOGGER.info("Committed deletion of translation files for: %s", name)
+            if push_url and push_branch:
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        base_path,
+                        "push",
+                        "origin",
+                        f"HEAD:{push_branch}",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    timeout=120,
+                )
+                LOGGER.info("Pushed to origin %s", push_branch)
+        return True, None, committed
+    except subprocess.CalledProcessError as e:
+        err = e.stderr or e
+        LOGGER.warning("Git commit/push failed for %s: %s", name, err)
+        stderr = err.decode(errors="replace") if isinstance(err, bytes) else str(err)
+        return (
+            False,
+            to_error_dict(
+                BoostEndpointErrorCode.GIT_PUSH_FAILED,
+                f"Git commit/push failed: {stderr}",
+                component_name=name,
+                stderr=stderr[:500],
+            ),
+            committed,
+        )
+    except subprocess.TimeoutExpired as e:
+        LOGGER.warning("Git commit/push timeout for %s", name)
+        timeout = e.timeout if e.timeout is not None else 0
+        return (
+            False,
+            to_error_dict(
+                BoostEndpointErrorCode.GIT_PUSH_TIMEOUT,
+                "Git commit/push timeout",
+                component_name=name,
+                timeout_seconds=timeout,
+            ),
+            committed,
+        )
+
+
+def _git_restore_removed_files(
+    base_path: str,
+    rel_paths: list[str],
+    *,
+    committed: bool,
+) -> None:
+    """Restore removed translation files in the working tree after git failure."""
+    try:
+        if committed:
+            subprocess.run(
+                ["git", "-C", base_path, "reset", "--hard", "HEAD~1"],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+        else:
+            subprocess.run(
+                ["git", "-C", base_path, "checkout", "--", *rel_paths],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        LOGGER.warning("Failed to restore translation files after git error: %s", e)
+
+
 def _build_extension_to_format() -> dict[str, str]:
     """Build extension -> format_id from Weblate FILE_FORMATS (internal API)."""
     result = {}
@@ -129,7 +281,6 @@ class BoostComponentService:
         self.lang_code = lang_code
         self.version = version
         self.extensions = extensions  # If None or empty, no filtering by extension list
-        self.temp_dir: str | None = None
         self._ext_to_format: dict[str, str] | None = None
 
     def get_extension_to_format(self) -> dict[str, str]:
@@ -663,7 +814,10 @@ class BoostComponentService:
         self, component: Component, result: dict[str, Any]
     ) -> None:
         """
-        Delete component, remove its translation files from disk, commit and push.
+        Remove translation files, commit and push, then delete the component.
+
+        DB deletion is deferred until after git push succeeds so a failed push
+        does not leave the database inconsistent with the remote repository.
 
         Updates result["components_deleted"] and result["errors"] as needed.
         """
@@ -685,7 +839,6 @@ class BoostComponentService:
                 language=component.source_language
             )
         ]
-        component.delete()
 
         actually_removed = []
         for file_path in translation_files:
@@ -700,82 +853,45 @@ class BoostComponentService:
                         file_path,
                         e,
                     )
-                    result["errors"].append(f"Failed to remove {file_path}: {e}")
+                    result["errors"].append(
+                        to_error_dict(
+                            BoostEndpointErrorCode.FILE_REMOVE_FAILED,
+                            f"Failed to remove {file_path}: {e}",
+                            file_path=file_path,
+                        )
+                    )
 
         if actually_removed and os.path.isdir(os.path.join(base_path, ".git")):
-            try:
-                # Stage only the removed files (not all tracked changes)
-                rel_paths = [os.path.relpath(p, base_path) for p in actually_removed]
-                subprocess.run(
-                    ["git", "-C", base_path, "add", "--", *rel_paths],
-                    check=True,
-                    capture_output=True,
-                    timeout=60,
-                )
-                git_status = subprocess.run(
-                    ["git", "-C", base_path, "status", "--porcelain"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    check=False,
-                )
-                if git_status.stdout.strip():
-                    committer = getattr(settings, "DEFAULT_COMMITER_NAME", "Weblate")
-                    email = getattr(
-                        settings,
-                        "DEFAULT_COMMITER_EMAIL",
-                        "noreply@weblate.org",
+            rel_paths = [os.path.relpath(p, base_path) for p in actually_removed]
+            ok, err, committed = _git_commit_and_push_removals(
+                base_path,
+                rel_paths,
+                name=name,
+                push_url=push_url,
+                push_branch=push_branch,
+            )
+            if not ok:
+                result["errors"].append(
+                    err
+                    or to_error_dict(
+                        BoostEndpointErrorCode.GIT_PUSH_FAILED,
+                        "Git commit/push failed",
+                        component_name=name,
                     )
-                    author = f"{committer} <{email}>"
-                    subprocess.run(
-                        [
-                            "git",
-                            "-C",
-                            base_path,
-                            "commit",
-                            "-m",
-                            f"Remove translation files for deleted component: {name}",
-                            "--author",
-                            author,
-                        ],
-                        check=True,
-                        capture_output=True,
-                        timeout=30,
-                    )
-                    LOGGER.info("Committed deletion of translation files for: %s", name)
-                    if push_url and push_branch:
-                        # Push current branch to remote push_branch
-                        subprocess.run(
-                            [
-                                "git",
-                                "-C",
-                                base_path,
-                                "push",
-                                "origin",
-                                f"HEAD:{push_branch}",
-                            ],
-                            check=True,
-                            capture_output=True,
-                            timeout=120,
-                        )
-                        LOGGER.info("Pushed to origin %s", push_branch)
-            except subprocess.CalledProcessError as e:
-                LOGGER.warning("Git commit/push failed for %s: %s", name, e.stderr or e)
-                result["errors"].append(f"Git commit/push failed: {e.stderr or e}")
-            except subprocess.TimeoutExpired:
-                LOGGER.warning("Git commit/push timeout for %s", name)
-                result["errors"].append("Git commit/push timeout")
+                )
+                _git_restore_removed_files(base_path, rel_paths, committed=committed)
+                return
+
+        with transaction.atomic():
+            component.delete()
 
         result["components_deleted"] += 1
         LOGGER.info("Deleted component (not in configs): %s", name)
 
     def process_submodule(
-        self, submodule: str, user=None, request=None
+        self, submodule: str, temp_dir: str, user=None, request=None
     ) -> dict[str, Any]:
         """Process a single submodule: clone, scan, create/update components."""
-        if self.temp_dir is None:
-            msg = "process_submodule requires temp_dir; call process_all() instead"
-            raise TypeError(msg)
         result: dict[str, Any] = {
             "submodule": submodule,
             "success": False,
@@ -787,13 +903,18 @@ class BoostComponentService:
         }
 
         # Create temp directory for this submodule
-        temp_submodule_dir = os.path.join(self.temp_dir, submodule)
+        temp_submodule_dir = os.path.join(temp_dir, submodule)
         resolved = Path(temp_submodule_dir).resolve()
-        temp_dir_resolved = Path(self.temp_dir).resolve()
+        temp_dir_resolved = Path(temp_dir).resolve()
         try:
             resolved.relative_to(temp_dir_resolved)
         except ValueError:
-            result["errors"].append(f"Invalid submodule name: {submodule}")
+            append_error(
+                result,
+                BoostEndpointErrorCode.INVALID_SUBMODULE,
+                f"Invalid submodule name: {submodule}",
+                submodule=submodule,
+            )
             return result
         os.makedirs(temp_submodule_dir, exist_ok=True)
 
@@ -801,14 +922,24 @@ class BoostComponentService:
         if not self.clone_repository(
             submodule, temp_submodule_dir, f"local-{self.lang_code}"
         ):
-            result["errors"].append(f"Failed to clone repository for {submodule}")
+            append_error(
+                result,
+                BoostEndpointErrorCode.CLONE_FAILED,
+                f"Failed to clone repository for {submodule}",
+                submodule=submodule,
+                organization=self.organization,
+                lang_code=self.lang_code,
+            )
             return result
 
         # Scan for documentation files
         configs = self.scan_documentation_files(temp_submodule_dir)
         if not configs:
-            result["errors"].append(
-                f"No supported documentation files found in {submodule}"
+            append_error(
+                result,
+                BoostEndpointErrorCode.NO_DOCUMENTATION_FILES,
+                f"No supported documentation files found in {submodule}",
+                submodule=submodule,
             )
             return result
 
@@ -821,19 +952,35 @@ class BoostComponentService:
         if request is not None and user is not None:
             if existing_project is not None:
                 if not user.has_perm("project.edit", existing_project):
-                    result["errors"].append(
-                        "Can not create components (missing project.edit)"
+                    append_error(
+                        result,
+                        BoostEndpointErrorCode.PERMISSION_DENIED,
+                        "Can not create components (missing project.edit)",
+                        permission="project.edit",
+                        project_slug=project_slug,
                     )
                     return result
             elif not user.has_perm("project.add"):
-                result["errors"].append("Can not create project (missing project.add)")
+                append_error(
+                    result,
+                    BoostEndpointErrorCode.PERMISSION_DENIED,
+                    "Can not create project (missing project.add)",
+                    permission="project.add",
+                    project_slug=project_slug,
+                )
                 return result
 
         # Get or create project
         try:
             project = self.get_or_create_project(submodule, user)
         except Exception as e:
-            result["errors"].append(f"Failed to create project: {e}")
+            append_error(
+                result,
+                BoostEndpointErrorCode.PROJECT_CREATE_FAILED,
+                f"Failed to create project: {e}",
+                submodule=submodule,
+                exception_type=type(e).__name__,
+            )
             report_error(cause="Project creation")
             return result
 
@@ -861,16 +1008,25 @@ class BoostComponentService:
                     LOGGER.warning(
                         "Failed to delete component %s: %s", component.slug, e
                     )
-                    result["errors"].append(f"Failed to delete {component.slug}: {e}")
+                    append_error(
+                        result,
+                        BoostEndpointErrorCode.COMPONENT_DELETE_FAILED,
+                        f"Failed to delete {component.slug}: {e}",
+                        component_slug=component.slug,
+                        exception_type=type(e).__name__,
+                    )
 
         any_component_ok = (
             result["components_created"] + result["components_updated"]
         ) > 0
         result["success"] = any_component_ok
         if not any_component_ok and result["components_failed"]:
-            result["errors"].append(
+            append_error(
+                result,
+                BoostEndpointErrorCode.ALL_COMPONENTS_FAILED,
                 "Failed to create or update every scanned component "
-                f"({result['components_failed']} config(s))"
+                f"({result['components_failed']} config(s))",
+                components_failed=result["components_failed"],
             )
         return result
 
@@ -879,8 +1035,8 @@ class BoostComponentService:
     ) -> dict[str, Any]:
         """Process all submodules."""
         # Create temp directory
-        self.temp_dir = tempfile.mkdtemp(prefix="boost_endpoint_")
-        LOGGER.info("Using temp directory: %s", self.temp_dir)
+        temp_dir = tempfile.mkdtemp(prefix="boost_endpoint_")
+        LOGGER.info("Using temp directory: %s", temp_dir)
 
         results: dict[str, Any] = {
             "total_submodules": len(submodules),
@@ -892,7 +1048,9 @@ class BoostComponentService:
         try:
             for submodule in submodules:
                 LOGGER.info("Processing submodule: %s", submodule)
-                result = self.process_submodule(submodule, user=user, request=request)
+                result = self.process_submodule(
+                    submodule, temp_dir, user=user, request=request
+                )
                 results["submodule_results"].append(result)
 
                 if result["success"]:
@@ -902,8 +1060,8 @@ class BoostComponentService:
 
         finally:
             # Cleanup temp directory
-            if self.temp_dir and os.path.exists(self.temp_dir):
-                shutil.rmtree(self.temp_dir, ignore_errors=True)
-                LOGGER.info("Cleaned up temp directory: %s", self.temp_dir)
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                LOGGER.info("Cleaned up temp directory: %s", temp_dir)
 
         return results
